@@ -7,7 +7,7 @@
 
 const KEY = 'petrecere.v1';
 const VKEY = 'petrecere.versiune';
-const APP_VERSION = '1.2';
+const APP_VERSION = '1.3';
 const DEFAULT_TABLES = 10;
 const DEFAULT_CAP = 10;
 
@@ -37,13 +37,65 @@ let tab = 'home';
 let guestQuery = '';
 let guestFilter = 'all';
 
+/* Verifică și repară datele venite din memoria telefonului sau din
+   fișierul de copie de siguranță: id-uri lipsă sau duplicate, capacități
+   nevalide, invitați trimiși la o masă care nu există. Fără asta, un fișier
+   stricat sau editat de mână lăsa aplicația într-o stare din care unele
+   butoane (ștergere, mutare) nu mai funcționau. */
+function curataDate(d) {
+  d = d || {};
+
+  const idMese = new Set();
+  const tables = (Array.isArray(d.tables) ? d.tables : []).map(t => {
+    t = t || {};
+    let id = String(t.id || '');
+    while (!id || idMese.has(id)) id = uid();
+    idMese.add(id);
+    const cap = parseInt(t.capacity, 10);
+    return {
+      id,
+      name: String(t.name == null || String(t.name).trim() === '' ? 'Masa' : t.name).trim().slice(0, 60),
+      capacity: Math.min(500, Math.max(1, isNaN(cap) ? DEFAULT_CAP : cap))
+    };
+  });
+
+  const idInvitati = new Set();
+  const guests = (Array.isArray(d.guests) ? d.guests : [])
+    .filter(g => g && String(g.name == null ? '' : g.name).trim() !== '')
+    .map(g => {
+      let id = String(g.id || '');
+      while (!id || idInvitati.has(id)) id = uid();
+      idInvitati.add(id);
+      const tid = g.tableId == null ? '' : String(g.tableId);
+      return {
+        id,
+        createdAt: +g.createdAt || Date.now(),
+        name: String(g.name).trim().slice(0, 120),
+        phone: String(g.phone == null ? '' : g.phone).trim().slice(0, 40),
+        tableId: idMese.has(tid) ? tid : null,
+        paid: !!g.paid,
+        notes: String(g.notes == null ? '' : g.notes).trim().slice(0, 500)
+      };
+    });
+
+  return {
+    version: 1,
+    eventName: String(d.eventName == null || String(d.eventName).trim() === ''
+      ? 'Petrecere de final de an' : d.eventName).trim().slice(0, 80),
+    eventDate: /^\d{4}-\d{2}-\d{2}$/.test(String(d.eventDate || '')) ? String(d.eventDate) : '',
+    eventPlace: String(d.eventPlace == null ? '' : d.eventPlace).trim().slice(0, 120),
+    tables,
+    guests
+  };
+}
+
 function load() {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return freshState();
     const d = JSON.parse(raw);
     if (!d || !Array.isArray(d.tables) || !Array.isArray(d.guests)) return freshState();
-    return d;
+    return curataDate(d);
   } catch (e) {
     console.warn('Nu am putut citi datele salvate:', e);
     return freshState();
@@ -55,7 +107,20 @@ function save() {
     localStorage.setItem(KEY, JSON.stringify(S));
   } catch (e) {
     toast('Eroare la salvare!');
+    return;
   }
+  /* Orice altă modificare făcută după o ștergere anulează oferta de „Anulează”.
+     Altfel, dacă între timp bifai o plată sau adăugai cineva, apăsarea pe
+     Anulează ar fi dat totul înapoi și ar fi pierdut modificările acelea. */
+  if (undoArmed) renuntaLaAnulare();
+}
+
+let undoArmed = false;
+
+function renuntaLaAnulare() {
+  undoArmed = false;
+  const t = $('#toast');
+  if (t && !t.hidden && t.querySelector('#undoBtn')) t.hidden = true;
 }
 
 function uid() {
@@ -118,15 +183,17 @@ function toast(msg, undoJson, ms) {
   t.style.animation = '';
 
   if (undoJson) {
+    undoArmed = true;
     $('#undoBtn').addEventListener('click', () => {
       clearTimeout(toastTimer);
+      undoArmed = false;
       t.hidden = true;
       restoreSnapshot(undoJson);
     });
   }
 
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.hidden = true; }, ms || (undoJson ? 6500 : 2400));
+  toastTimer = setTimeout(() => { t.hidden = true; undoArmed = false; }, ms || (undoJson ? 6500 : 2400));
 }
 
 function initials(name) {
@@ -350,12 +417,16 @@ function filteredGuests() {
 
   const q = norm(guestQuery);
   if (q) {
+    // „0745 111 222” sau „0745-111” trebuie să găsească „0745111222”
+    const cifre = q.replace(/[^0-9]/g, '');
+    const caCifre = cifre.length >= 3 && /^[0-9 ()+.\-]+$/.test(guestQuery.trim());
     list = list.filter(g => {
       const tb = tableById(g.tableId);
       return norm(g.name).includes(q)
           || norm(g.phone).includes(q)
           || norm(g.notes).includes(q)
-          || (tb && norm(tb.name).includes(q));
+          || (tb && norm(tb.name).includes(q))
+          || (caCifre && String(g.phone || '').replace(/[^0-9]/g, '').includes(cifre));
     });
   }
   return list;
@@ -465,17 +536,28 @@ function srow(action, icon, title, sub, danger) {
 
 let sheetOpen = false;
 let popGuard = false;
+let sheetPushed = false;     // am adăugat noi o intrare în istoric pentru fereastra asta?
+let sheetHideTimer = null;   // animația de închidere; trebuie oprită dacă se redeschide repede
 
-function openSheet(html) {
-  $('#sheetBody').innerHTML = html;
+/* meta: { table: id } — ține minte că fereastra arată o anumită masă, ca să o
+   putem reîmprospăta când se bifează o plată din interiorul ei.
+   Atenție: atributul se numește data-sheet-table, NU data-table — acesta din
+   urmă e folosit de rândurile de masă, iar closest('[data-table]') l-ar fi
+   găsit pe #sheetBody și ar fi înghițit apăsările pe invitații din fereastră. */
+function openSheet(html, meta) {
+  clearTimeout(sheetHideTimer);      // altfel o închidere în curs ascunde fereastra nouă
+  const body = $('#sheetBody');
+  body.innerHTML = html;
+  body.dataset.sheetTable = (meta && meta.table) ? meta.table : '';
   const wrap = $('#sheetWrap');
   const sheet = $('#sheet');
   sheet.classList.remove('closing');
   wrap.hidden = false;
-  $('#sheetBody').scrollTop = 0;
+  body.scrollTop = 0;
   if (!sheetOpen) {
     sheetOpen = true;
-    history.pushState({ sheet: true }, '');
+    try { history.pushState({ sheet: true }, ''); sheetPushed = true; }
+    catch (e) { sheetPushed = false; }
   }
 }
 
@@ -484,9 +566,22 @@ function closeSheet(fromPop) {
   const wrap = $('#sheetWrap');
   const sheet = $('#sheet');
   sheet.classList.add('closing');
-  setTimeout(() => { wrap.hidden = true; sheet.classList.remove('closing'); }, 210);
+  clearTimeout(sheetHideTimer);
+  sheetHideTimer = setTimeout(() => {
+    wrap.hidden = true;
+    sheet.classList.remove('closing');
+    $('#sheetBody').dataset.sheetTable = '';
+  }, 210);
   sheetOpen = false;
-  if (!fromPop) { popGuard = true; history.back(); }
+  /* history.back() doar dacă noi am adăugat intrarea — altfel un „înapoi”
+     ar scoate utilizatorul din aplicație în loc să închidă fereastra */
+  if (!fromPop && sheetPushed) {
+    popGuard = true;
+    sheetPushed = false;
+    history.back();
+  } else {
+    sheetPushed = false;
+  }
 }
 
 window.addEventListener('popstate', () => {
@@ -494,9 +589,17 @@ window.addEventListener('popstate', () => {
   if (sheetOpen) closeSheet(true);
 });
 
+/* Închide fereastra sau, dacă am venit din fereastra unei mese, se întoarce
+   la ea — ca să poți pune mai mulți oameni la aceeași masă fără să o redeschizi. */
+function inchideSauInapoiLaMasa(backTable) {
+  render();
+  if (backTable && tableById(backTable)) sheetTable(backTable);
+  else closeSheet();
+}
+
 /* ---------------- fereastră: invitat ---------------- */
 
-function sheetGuest(guestId, presetTable) {
+function sheetGuest(guestId, presetTable, backTable) {
   const g = guestId ? guestById(guestId) : null;
   const cur = g ? g.tableId : (presetTable || '');
 
@@ -582,11 +685,10 @@ function sheetGuest(guestId, presetTable) {
       S.guests.push(Object.assign({ id: uid(), createdAt: Date.now() }, data));
     }
     save();
-    warnIfOver(tid);
-    closeSheet();
-    render();
     buzz(14);
-    toast(g ? 'Salvat' : 'Invitat adăugat');
+    inchideSauInapoiLaMasa(backTable);
+    const peste = mesajSupraOcupare(tid);
+    toast((g ? 'Salvat' : 'Invitat adăugat') + (peste ? ' · ' + peste : ''));
   }
 
   /* avertisment în interiorul ferestrei — nu pierzi ce ai scris */
@@ -610,12 +712,19 @@ function sheetGuest(guestId, presetTable) {
 
   $('#f_save').addEventListener('click', () => commit(false));
 
+  /* dacă schimbi numele, avertismentul de dublură nu mai are sens */
+  $('#f_name').addEventListener('input', () => {
+    const box = $('#f_dup');
+    if (!box.hidden) { box.hidden = true; box.innerHTML = ''; }
+  });
+
   if (g) {
     $('#f_del').addEventListener('click', () => {
       confirmSheet('Ștergi invitatul?', esc(g.name) + ' va fi șters din listă.', 'Șterge', () => {
         const before = snapshot();
         S.guests = S.guests.filter(x => x.id !== g.id);
-        save(); closeSheet(); render();
+        save();
+        inchideSauInapoiLaMasa(backTable);
         toast(g.name + ' — șters', before);
       });
     });
@@ -624,19 +733,22 @@ function sheetGuest(guestId, presetTable) {
   if (!g) setTimeout(() => { const n = $('#f_name'); if (n) n.focus(); }, 260);
 }
 
-function warnIfOver(tid) {
-  if (!tid) return;
+/* întoarce un text de avertizare dacă masa a rămas cu mai mulți oameni
+   decât locuri, ca să îl putem lipi la mesajul principal (înainte era un
+   toast separat, care era înlocuit imediat de „Invitat adăugat” și nu se vedea) */
+function mesajSupraOcupare(tid) {
+  if (!tid) return '';
   const tb = tableById(tid);
-  if (!tb) return;
+  if (!tb) return '';
   const n = guestsAt(tid).length;
-  if (n > (+tb.capacity || 0)) {
-    toast(tb.name + ': ' + n + ' persoane la ' + tb.capacity + ' locuri!');
-  }
+  const cap = +tb.capacity || 0;
+  if (n <= cap) return '';
+  return tb.name + ' are ' + n + ' persoane la ' + cap + ' locuri!';
 }
 
 /* ---------------- fereastră: adaugă mai mulți ---------------- */
 
-function sheetAddMany(presetTable) {
+function sheetAddMany(presetTable, backTable) {
   let opts = '<option value="">— fără masă —</option>';
   S.tables.forEach(tb => {
     const free = (+tb.capacity || 0) - guestsAt(tb.id).length;
@@ -680,11 +792,11 @@ function sheetAddMany(presetTable) {
       S.guests.push({ id: uid(), createdAt: Date.now(), name, phone: '', tableId: tid, paid: false, notes: '' });
     });
     save();
-    warnIfOver(tid);
-    closeSheet();
-    render();
     buzz(18);
-    toast(names.length + (names.length === 1 ? ' invitat adăugat' : ' invitați adăugați'));
+    inchideSauInapoiLaMasa(backTable);
+    const peste = mesajSupraOcupare(tid);
+    toast(names.length + (names.length === 1 ? ' invitat adăugat' : ' invitați adăugați')
+          + (peste ? ' · ' + peste : ''));
   }
 
   $('#m_save').addEventListener('click', () => {
@@ -769,16 +881,25 @@ function sheetTable(tid) {
         + '<button class="btn ghost sm" id="t_edit">Modifică masa</button>'
         + '</div>';
 
-  openSheet(html);
+  openSheet(html, { table: tid });
 
-  $('#t_add').addEventListener('click', () => sheetGuest(null, tid));
-  $('#t_many').addEventListener('click', () => sheetAddMany(tid));
-  $('#t_edit').addEventListener('click', () => sheetEditTable(tid));
+  $('#t_add').addEventListener('click', () => sheetGuest(null, tid, tid));
+  $('#t_many').addEventListener('click', () => sheetAddMany(tid, tid));
+  $('#t_edit').addEventListener('click', () => sheetEditTable(tid, tid));
+}
+
+/* primul „Masa N” neocupat — altfel, după ștergerea unei mese, masa nouă
+   primea un nume care exista deja (10 mese, ștergi Masa 5, următoarea „Masa 10”) */
+function urmatorulNumeMasa() {
+  const luate = new Set(S.tables.map(t => norm(t.name)));
+  let i = 1;
+  while (luate.has(norm('Masa ' + i))) i++;
+  return 'Masa ' + i;
 }
 
 /* ---------------- fereastră: editează masă ---------------- */
 
-function sheetEditTable(tid) {
+function sheetEditTable(tid, backTable) {
   const tb = tid ? tableById(tid) : null;
   const occupied = tb ? guestsAt(tb.id).length : 0;
   let cap = tb ? (+tb.capacity || DEFAULT_CAP) : DEFAULT_CAP;
@@ -789,7 +910,7 @@ function sheetEditTable(tid) {
 
   html += '<div class="field"><label>Numele mesei</label>'
         + '<input id="t_name" type="text" placeholder="ex. Masa 1 / Masa Contabilitate" value="'
-        + esc(tb ? tb.name : 'Masa ' + (S.tables.length + 1)) + '" autocomplete="off"></div>';
+        + esc(tb ? tb.name : urmatorulNumeMasa()) + '" autocomplete="off"></div>';
 
   html += '<div class="field"><label>Număr de locuri</label>'
         + '<div class="stepper"><button id="t_minus">−</button>'
@@ -812,11 +933,14 @@ function sheetEditTable(tid) {
   $('#t_plus').addEventListener('click', () => { if (cap < 60) { cap++; paint(); buzz(8); } });
 
   $('#t_save').addEventListener('click', () => {
-    const name = $('#t_name').value.trim() || ('Masa ' + (S.tables.length + 1));
+    const name = $('#t_name').value.trim() || urmatorulNumeMasa();
+    let idNou = null;
     if (tb) { tb.name = name; tb.capacity = cap; }
-    else { S.tables.push({ id: uid(), name, capacity: cap }); }
-    save(); closeSheet(); render(); buzz(14);
-    toast(tb ? 'Masă actualizată' : 'Masă adăugată');
+    else { idNou = uid(); S.tables.push({ id: idNou, name, capacity: cap }); }
+    save(); buzz(14);
+    inchideSauInapoiLaMasa(backTable);
+    const peste = mesajSupraOcupare(tb ? tb.id : idNou);
+    toast((tb ? 'Masă actualizată' : 'Masă adăugată') + (peste ? ' · ' + peste : ''));
   });
 
   if (tb) {
@@ -858,7 +982,10 @@ function sheetEvent() {
 /* ---------------- fereastră: capacitate globală ---------------- */
 
 function sheetCapAll() {
-  let cap = DEFAULT_CAP;
+  // pornim de la capacitatea actuală, dacă toate mesele au aceeași
+  const capacitati = [...new Set(S.tables.map(t => +t.capacity || 0))];
+  let cap = capacitati.length === 1 ? capacitati[0] : DEFAULT_CAP;
+  if (cap < 1) cap = DEFAULT_CAP;
   let html = '';
   html += '<h3 class="sheet-title">Capacitate pentru toate mesele</h3>';
   html += '<p class="sheet-sub">Setează același număr de locuri la toate cele ' + S.tables.length + ' mese.</p>';
@@ -872,8 +999,13 @@ function sheetCapAll() {
   $('#c_minus').addEventListener('click', () => { if (cap > 1) { cap--; paint(); } });
   $('#c_plus').addEventListener('click', () => { if (cap < 60) { cap++; paint(); } });
   $('#c_save').addEventListener('click', () => {
+    const before = snapshot();
     S.tables.forEach(t => { t.capacity = cap; });
-    save(); closeSheet(); render(); toast('Toate mesele au ' + cap + ' locuri');
+    save(); closeSheet(); render();
+    const peste = S.tables.filter(t => guestsAt(t.id).length > cap).length;
+    toast('Toate mesele au ' + cap + ' locuri'
+          + (peste ? ' · ' + peste + (peste === 1 ? ' masă e' : ' mese sunt') + ' peste' : ''),
+          before);
   });
 }
 
@@ -918,14 +1050,18 @@ function importBackup() {
     const fr = new FileReader();
     fr.onload = () => {
       try {
-        const d = JSON.parse(String(fr.result));
-        if (!d || !Array.isArray(d.tables) || !Array.isArray(d.guests)) throw new Error('format');
+        const brut = JSON.parse(String(fr.result));
+        if (!brut || !Array.isArray(brut.tables) || !Array.isArray(brut.guests)) throw new Error('format');
+        const d = curataDate(brut);
+        const sarite = brut.guests.length - d.guests.length;
         confirmSheet('Înlocuiești datele actuale?',
           'Fișierul are ' + d.guests.length + ' invitați și ' + d.tables.length
-          + ' mese. Datele de acum vor fi înlocuite.',
+          + ' mese. Datele de acum vor fi înlocuite.'
+          + (sarite > 0 ? ' (' + sarite + ' rânduri fără nume au fost sărite.)' : ''),
           'Da, încarcă', () => {
+            const before = snapshot();
             S = d; save(); paintHeader(); closeSheet(); render();
-            toast('Date încărcate');
+            toast('Date încărcate', before);
           });
       } catch (e) {
         toast('Fișier nevalid');
@@ -1011,6 +1147,16 @@ function render() {
     b.classList.toggle('active', b.dataset.tab === tab));
 }
 
+/* Mergi la Invitați cu un filtru anume. Trebuie separat de goTab, pentru că
+   goTab nu redesenează dacă ești deja pe ecranul respectiv — iar atunci
+   filtrul și căutarea rămâneau schimbate în memorie, dar nu pe ecran. */
+function goGuests(filter) {
+  guestFilter = filter;
+  guestQuery = '';
+  if (tab === 'guests') { window.scrollTo(0, 0); renderGuests(); }
+  else goTab('guests');
+}
+
 function goTab(name) {
   if (tab === name) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
   tab = name;
@@ -1027,8 +1173,8 @@ const QUICK = {
   export: () => exportBackup(),
   import: () => importBackup(),
   shareText: () => shareSummary(),
-  showUnpaid: () => { guestFilter = 'unpaid'; guestQuery = ''; goTab('guests'); },
-  showNoTable: () => { guestFilter = 'notable'; guestQuery = ''; goTab('guests'); },
+  showUnpaid: () => goGuests('unpaid'),
+  showNoTable: () => goGuests('notable'),
   resetPaid: () => confirmSheet('Resetezi plățile?', 'Toți invitații devin „neachitat”.', 'Resetează', () => {
     const before = snapshot();
     S.guests.forEach(g => { g.paid = false; });
@@ -1036,7 +1182,8 @@ const QUICK = {
     toast('Plăți resetate', before);
   }),
   wipe: () => confirmSheet('Ștergi absolut tot?',
-    'Toți invitații și toate mesele dispar. Se revine la 10 mese de 10 locuri. Acțiunea nu poate fi anulată.',
+    'Toți invitații și toate mesele dispar. Se revine la 10 mese de 10 locuri. '
+    + 'Ai 12 secunde să te răzgândești, cu „Anulează” din mesajul de jos.',
     'Șterge tot', () => {
       const before = snapshot();
       S = freshState(); save(); paintHeader(); closeSheet(); render();
@@ -1068,7 +1215,16 @@ document.addEventListener('click', (e) => {
       buzz(g.paid ? 16 : 8);
       toast(g.paid ? g.name + ' — achitat' : g.name + ' — neachitat');
       paintHeader();
-      if (sheetOpen) return;
+      if (sheetOpen) {
+        // dacă fereastra arată o masă, reface numărătoarea „x au achitat” și harta locurilor
+        const tid = $('#sheetBody').dataset.sheetTable;
+        if (tid && tableById(tid)) {
+          const poz = $('#sheetBody').scrollTop;
+          sheetTable(tid);
+          $('#sheetBody').scrollTop = poz;
+        }
+        return;
+      }
       if (tab === 'guests') paintGuestList();
       else render();
     }
@@ -1079,12 +1235,18 @@ document.addEventListener('click', (e) => {
   if (tbl) { sheetTable(tbl.dataset.table); buzz(8); return; }
 
   const gst = e.target.closest('[data-guest]');
-  if (gst) { sheetGuest(gst.dataset.guest); buzz(8); return; }
+  if (gst) {
+    // dacă am ajuns aici din fereastra unei mese, ne întoarcem la ea după salvare
+    const dinMasa = sheetOpen ? ($('#sheetBody').dataset.sheetTable || null) : null;
+    sheetGuest(gst.dataset.guest, null, dinMasa);
+    buzz(8);
+    return;
+  }
 });
 
 $('#fab').addEventListener('click', () => { sheetGuest(null); buzz(12); });
 $('#btnQuickSearch').addEventListener('click', () => {
-  guestFilter = 'all'; guestQuery = ''; goTab('guests');
+  goGuests('all');
   setTimeout(() => { const q = $('#q'); if (q) q.focus(); }, 120);
 });
 $('#sheetBackdrop').addEventListener('click', () => closeSheet());
