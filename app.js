@@ -71,16 +71,56 @@ function buzz(ms) {
   try { if (navigator.vibrate) navigator.vibrate(ms || 12); } catch (e) {}
 }
 
+/* Text „curățat” pentru căutare și comparare nume:
+   fără diacritice, fără majuscule, fără spații duble.
+   Așa „tanase” îl găsește pe „Tănase”, iar „Ștefan” = „stefan”. */
+function norm(s) {
+  return String(s == null ? '' : s)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')   // taie semnele diacritice
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/* copie a întregii stări, pentru butonul „Anulează” */
+function snapshot() { return JSON.stringify(S); }
+
+function restoreSnapshot(json) {
+  try {
+    S = JSON.parse(json);
+    save();
+    paintHeader();
+    render();
+    toast('Am pus înapoi');
+    buzz(14);
+  } catch (e) {
+    toast('Nu am putut anula');
+  }
+}
+
 let toastTimer = null;
-function toast(msg) {
+/* toast(mesaj) — simplu
+   toast(mesaj, undoJson) — cu buton „Anulează” care readuce starea salvată */
+function toast(msg, undoJson, ms) {
   const t = $('#toast');
-  t.textContent = msg;
+  t.innerHTML = '<span>' + esc(msg) + '</span>'
+    + (undoJson ? '<button type="button" id="undoBtn">Anulează</button>' : '');
   t.hidden = false;
   t.style.animation = 'none';
   void t.offsetWidth;
   t.style.animation = '';
+
+  if (undoJson) {
+    $('#undoBtn').addEventListener('click', () => {
+      clearTimeout(toastTimer);
+      t.hidden = true;
+      restoreSnapshot(undoJson);
+    });
+  }
+
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.hidden = true; }, 2400);
+  toastTimer = setTimeout(() => { t.hidden = true; }, ms || (undoJson ? 6500 : 2400));
 }
 
 function initials(name) {
@@ -302,14 +342,14 @@ function filteredGuests() {
   else if (guestFilter === 'unpaid') list = list.filter(g => !g.paid);
   else if (guestFilter === 'notable') list = list.filter(g => !g.tableId || !tableById(g.tableId));
 
-  const q = guestQuery.trim().toLowerCase();
+  const q = norm(guestQuery);
   if (q) {
     list = list.filter(g => {
       const tb = tableById(g.tableId);
-      return String(g.name).toLowerCase().includes(q)
-          || String(g.phone || '').toLowerCase().includes(q)
-          || String(g.notes || '').toLowerCase().includes(q)
-          || (tb && tb.name.toLowerCase().includes(q));
+      return norm(g.name).includes(q)
+          || norm(g.phone).includes(q)
+          || norm(g.notes).includes(q)
+          || (tb && norm(tb.name).includes(q));
     });
   }
   return list;
@@ -489,6 +529,7 @@ function sheetGuest(guestId, presetTable) {
         + '<textarea id="f_notes" placeholder="ex. vine cu soția, vegetarian, ajunge mai târziu">'
         + esc(g ? (g.notes || '') : '') + '</textarea></div>';
 
+  html += '<div id="f_dup" hidden></div>';
   html += '<button class="btn" id="f_save">' + (g ? 'Salvează modificările' : 'Adaugă invitatul') + '</button>';
 
   if (g) {
@@ -511,9 +552,16 @@ function sheetGuest(guestId, presetTable) {
     buzz(10);
   });
 
-  $('#f_save').addEventListener('click', () => {
+  /* dupOk = utilizatorul a confirmat că vrea totuși un nume care există deja */
+  function commit(dupOk) {
     const name = $('#f_name').value.trim();
     if (!name) { toast('Scrie numele invitatului'); $('#f_name').focus(); return; }
+
+    if (!dupOk) {
+      const dup = S.guests.find(x => (!g || x.id !== g.id) && norm(x.name) === norm(name));
+      if (dup) { showDupWarn(dup); return; }
+    }
+
     const tid = $('#f_table').value || null;
     const data = {
       name,
@@ -533,13 +581,36 @@ function sheetGuest(guestId, presetTable) {
     render();
     buzz(14);
     toast(g ? 'Salvat' : 'Invitat adăugat');
-  });
+  }
+
+  /* avertisment în interiorul ferestrei — nu pierzi ce ai scris */
+  function showDupWarn(dup) {
+    const tb = dup.tableId ? tableById(dup.tableId) : null;
+    const box = $('#f_dup');
+    box.hidden = false;
+    box.innerHTML = '<div class="warn-box">'
+      + '<b>„' + esc(dup.name) + '” este deja în listă</b>'
+      + '<p>' + (tb ? 'Stă la ' + esc(tb.name) : 'Nu are masă') + ' · '
+      + (dup.paid ? 'a achitat' : 'nu a achitat') + '.</p>'
+      + '<div class="btn-row" style="margin-top:12px">'
+      + '<button class="btn ghost sm" id="dup_no">Renunț</button>'
+      + '<button class="btn sm" id="dup_yes">Adaugă oricum</button>'
+      + '</div></div>';
+    box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    buzz(20);
+    $('#dup_yes').addEventListener('click', () => commit(true));
+    $('#dup_no').addEventListener('click', () => { box.hidden = true; box.innerHTML = ''; });
+  }
+
+  $('#f_save').addEventListener('click', () => commit(false));
 
   if (g) {
     $('#f_del').addEventListener('click', () => {
       confirmSheet('Ștergi invitatul?', esc(g.name) + ' va fi șters din listă.', 'Șterge', () => {
+        const before = snapshot();
         S.guests = S.guests.filter(x => x.id !== g.id);
-        save(); closeSheet(); render(); toast('Șters');
+        save(); closeSheet(); render();
+        toast(g.name + ' — șters', before);
       });
     });
   }
@@ -573,15 +644,33 @@ function sheetAddMany(presetTable) {
   html += '<div class="field"><label>Nume (unul pe rând)</label>'
         + '<textarea id="m_names" style="min-height:180px" placeholder="Popescu Andrei&#10;Ionescu Maria&#10;Georgescu Dan"></textarea></div>';
   html += '<div class="field"><label>Masa pentru toți</label><select id="m_table">' + opts + '</select></div>';
+  html += '<div id="m_dup" hidden></div>';
   html += '<button class="btn" id="m_save">Adaugă invitații</button>';
 
   openSheet(html);
 
-  $('#m_save').addEventListener('click', () => {
-    const lines = $('#m_names').value.split('\n').map(s => s.trim()).filter(Boolean);
-    if (!lines.length) { toast('Scrie cel puțin un nume'); return; }
+  function readLines() {
+    return $('#m_names').value.split('\n').map(s => s.trim()).filter(Boolean);
+  }
+
+  /* împarte numele scrise în: noi, deja existenți în listă, repetate în text */
+  function triage(lines) {
+    const existing = new Set(S.guests.map(x => norm(x.name)));
+    const seen = new Set();
+    const fresh = [], already = [], repeated = [];
+    lines.forEach(n => {
+      const k = norm(n);
+      if (seen.has(k)) { repeated.push(n); return; }
+      seen.add(k);
+      if (existing.has(k)) already.push(n);
+      else fresh.push(n);
+    });
+    return { fresh, already, repeated };
+  }
+
+  function add(names) {
     const tid = $('#m_table').value || null;
-    lines.forEach(name => {
+    names.forEach(name => {
       S.guests.push({ id: uid(), createdAt: Date.now(), name, phone: '', tableId: tid, paid: false, notes: '' });
     });
     save();
@@ -589,7 +678,41 @@ function sheetAddMany(presetTable) {
     closeSheet();
     render();
     buzz(18);
-    toast(lines.length + ' invitați adăugați');
+    toast(names.length + (names.length === 1 ? ' invitat adăugat' : ' invitați adăugați'));
+  }
+
+  $('#m_save').addEventListener('click', () => {
+    const lines = readLines();
+    if (!lines.length) { toast('Scrie cel puțin un nume'); return; }
+
+    const { fresh, already, repeated } = triage(lines);
+    const problems = already.concat(repeated);
+    if (!problems.length) { add(lines); return; }
+
+    const box = $('#m_dup');
+    box.hidden = false;
+    box.innerHTML = '<div class="warn-box">'
+      + '<b>' + problems.length + (problems.length === 1 ? ' nume se repetă' : ' nume se repetă') + '</b>'
+      + (already.length
+          ? '<p><b style="color:var(--muted);display:inline">Sunt deja în lista de invitați:</b> '
+            + already.map(esc).join(', ') + '</p>'
+          : '')
+      + (repeated.length
+          ? '<p><b style="color:var(--muted);display:inline">Scrise de mai multe ori mai sus:</b> '
+            + repeated.map(esc).join(', ') + '</p>'
+          : '')
+      + '<div class="btn-row" style="margin-top:12px">'
+      + '<button class="btn ghost sm" id="m_all">Adaugă tot (' + lines.length + ')</button>'
+      + (fresh.length
+          ? '<button class="btn sm" id="m_new">Doar cele noi (' + fresh.length + ')</button>'
+          : '<button class="btn ghost sm" id="m_no">Renunț</button>')
+      + '</div></div>';
+    box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    buzz(20);
+
+    $('#m_all').addEventListener('click', () => add(readLines()));
+    if (fresh.length) $('#m_new').addEventListener('click', () => add(fresh));
+    else $('#m_no').addEventListener('click', () => { box.hidden = true; box.innerHTML = ''; });
   });
 
   setTimeout(() => { const n = $('#m_names'); if (n) n.focus(); }, 260);
@@ -696,9 +819,11 @@ function sheetEditTable(tid) {
         occupied ? 'Cei ' + occupied + ' invitați de la această masă rămân în listă, dar fără masă.'
                  : 'Masa este goală.',
         'Șterge masa', () => {
+          const before = snapshot();
           S.guests.forEach(g => { if (g.tableId === tb.id) g.tableId = null; });
           S.tables = S.tables.filter(x => x.id !== tb.id);
-          save(); closeSheet(); render(); toast('Masă ștearsă');
+          save(); closeSheet(); render();
+          toast(tb.name + ' — ștearsă', before);
         });
     });
   }
@@ -899,13 +1024,17 @@ const QUICK = {
   showUnpaid: () => { guestFilter = 'unpaid'; guestQuery = ''; goTab('guests'); },
   showNoTable: () => { guestFilter = 'notable'; guestQuery = ''; goTab('guests'); },
   resetPaid: () => confirmSheet('Resetezi plățile?', 'Toți invitații devin „neachitat”.', 'Resetează', () => {
+    const before = snapshot();
     S.guests.forEach(g => { g.paid = false; });
-    save(); closeSheet(); render(); toast('Plăți resetate');
+    save(); closeSheet(); render();
+    toast('Plăți resetate', before);
   }),
   wipe: () => confirmSheet('Ștergi absolut tot?',
     'Toți invitații și toate mesele dispar. Se revine la 10 mese de 10 locuri. Acțiunea nu poate fi anulată.',
     'Șterge tot', () => {
-      S = freshState(); save(); paintHeader(); closeSheet(); render(); toast('S-a șters tot');
+      const before = snapshot();
+      S = freshState(); save(); paintHeader(); closeSheet(); render();
+      toast('S-a șters tot', before, 12000);
     })
 };
 

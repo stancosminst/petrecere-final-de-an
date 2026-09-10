@@ -1,6 +1,6 @@
 /* Service worker — face aplicația să funcționeze complet offline. */
 
-const CACHE = 'petrecere-v1';
+const CACHE = 'petrecere-v2';
 const ASSETS = [
   './',
   'index.html',

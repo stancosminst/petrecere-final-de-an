@@ -21,10 +21,13 @@ Funcționează **complet offline**, iar toate datele se salvează **doar pe tele
 - jos apar invitații care nu au încă masă
 
 **Invitați**
-- căutare după nume, telefon sau masă
+- căutare după nume, telefon sau masă, **fără grija diacriticelor** („tanase" îl găsește pe „Tănase")
 - filtre: toți / neachitat / achitat / fără masă
 - bifezi plata cu **o singură apăsare** pe cerculețul din dreapta
 - apeși pe un invitat → editezi numele, telefonul, masa, plata, observațiile; îl poți suna direct sau șterge
+- te avertizează dacă numele există deja în listă (și îți arată la ce masă stă), înainte de a-l adăuga a doua oară
+- la „Adaugă o listă" separă numele noi de cele care există deja: poți adăuga doar cele noi sau tot
+- după orice ștergere apare jos butonul **Anulează** câteva secunde — pune totul înapoi exact cum era
 
 **Setări**
 - numele, data și locația evenimentului
