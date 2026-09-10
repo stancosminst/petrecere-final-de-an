@@ -66,6 +66,13 @@ După ce ai adresa:
 
 ---
 
+## Actualizări
+
+Aplicația se actualizează singură: la fiecare pornire cu internet întreabă serverul
+dacă există o versiune nouă și, dacă da, o încarcă imediat — vezi jos mesajul
+„Aplicația s-a actualizat". Fără internet pornește instant din memoria telefonului,
+exact ca înainte. Datele introduse nu se pierd niciodată la actualizare.
+
 ## Copie de siguranță — important
 
 Datele stau în memoria browserului de pe telefon. Se pierd dacă:

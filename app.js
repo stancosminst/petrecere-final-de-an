@@ -6,6 +6,8 @@
 'use strict';
 
 const KEY = 'petrecere.v1';
+const VKEY = 'petrecere.versiune';
+const APP_VERSION = '1.2';
 const DEFAULT_TABLES = 10;
 const DEFAULT_CAP = 10;
 
@@ -25,6 +27,10 @@ function freshState() {
     guests: []
   };
 }
+
+/* aveam deja date salvate la pornire? (ca să știu dacă e instalare nouă
+   sau o versiune actualizată peste una veche) */
+const hadDataAtStart = localStorage.getItem(KEY) !== null;
 
 let S = load();
 let tab = 'home';
@@ -441,7 +447,7 @@ function renderSettings() {
   html += '<p class="muted-note" style="margin:22px 4px 0">'
         + 'Toate datele stau <b>doar pe acest telefon</b> și funcționează fără internet. '
         + 'Fă-ți din când în când o copie de siguranță (butonul „Salvează o copie”), '
-        + 'ca să nu pierzi lista dacă ștergi aplicația.<br><br>Gestiune Petrecere · v1.0</p>';
+        + 'ca să nu pierzi lista dacă ștergi aplicația.<br><br>Gestiune Petrecere · v' + APP_VERSION + '</p>';
 
   view.innerHTML = html;
 }
@@ -1088,9 +1094,38 @@ $('#sheetWrap').addEventListener('click', (e) => { if (e.target.id === 'sheetWra
 if (!localStorage.getItem(KEY)) save();   // scrie starea inițială (10 mese × 10 locuri)
 render();
 
-/* service worker — funcționare offline */
+/* anunț discret când aplicația a fost actualizată */
+(function anuntaVersiunea() {
+  let vazuta = null;
+  try { vazuta = localStorage.getItem(VKEY); } catch (e) { return; }
+  if (vazuta !== APP_VERSION) {
+    try { localStorage.setItem(VKEY, APP_VERSION); } catch (e) {}
+    // doar la actualizare peste o versiune existentă, nu la prima instalare
+    if (hadDataAtStart) {
+      setTimeout(() => toast('Aplicația s-a actualizat (v' + APP_VERSION + ')'), 700);
+    }
+  }
+})();
+
+/* service worker — offline + actualizare automată.
+   Fișierele vin „rețea întâi” (vezi sw.js), deci de obicei ești deja pe
+   versiunea nouă. Dacă totuși pornirea a venit din cache și între timp se
+   activează o versiune nouă, reîncărcăm o singură dată — dar niciodată în
+   timp ce ai o fereastră deschisă, ca să nu pierzi ce scrii. */
 if ('serviceWorker' in navigator) {
+  const aveaControlor = !!navigator.serviceWorker.controller;
+  let amReincarcat = false;
+
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!aveaControlor || amReincarcat) return;   // prima instalare: nu reîncărca
+    if (sheetOpen) return;                        // scrii ceva: lăsăm pe altă dată
+    amReincarcat = true;
+    location.reload();
+  });
+
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    navigator.serviceWorker.register('sw.js')
+      .then(reg => { try { reg.update(); } catch (e) {} })
+      .catch(() => {});
   });
 }
