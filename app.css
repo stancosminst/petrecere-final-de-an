@@ -387,6 +387,20 @@ main{
 .switch.on{ background:linear-gradient(120deg,#2f9c6a,var(--ok)); }
 .switch.on::after{ transform:translateX(21px); }
 
+/* invitat special: bifă aurie, iar cea de plată devine blocată pe „achitat” */
+.switch.gold.on{ background:linear-gradient(120deg, var(--gold-deep), var(--gold)); }
+.special-row{ border-color:rgba(232,195,122,.28); background:rgba(232,195,122,.06); }
+.special-row .t{ display:flex; align-items:center; gap:7px; color:var(--gold-soft); }
+.special-row .t svg{ width:16px; height:16px; color:var(--gold); fill:rgba(232,195,122,.25); }
+.toggle-row.locked{ opacity:.6; }
+.toggle-row.locked .switch{ cursor:not-allowed; }
+
+.pay-dot.special{
+  background:rgba(232,195,122,.15); border-color:rgba(232,195,122,.55); color:var(--gold);
+}
+.pay-dot.special svg{ stroke-width:2; fill:rgba(232,195,122,.3); }
+.chip.gold svg{ fill:rgba(232,195,122,.3); stroke-width:2; }
+
 /* stepper capacitate */
 .stepper{
   display:flex; align-items:center; gap:0;
@@ -458,6 +472,11 @@ main{
   border-color:rgba(86,217,150,.4);
   background:linear-gradient(145deg, rgba(86,217,150,.17), rgba(47,156,106,.10));
   color:#bff3d6;
+}
+.seat.taken.special{
+  border-color:rgba(232,195,122,.6);
+  background:linear-gradient(145deg, rgba(232,195,122,.32), rgba(184,144,74,.16));
+  color:var(--gold-soft);
 }
 .seat .sn{ font-size:10.5px; overflow:hidden; text-overflow:ellipsis; width:100%; white-space:nowrap; }
 

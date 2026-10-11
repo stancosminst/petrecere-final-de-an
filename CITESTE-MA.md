@@ -21,10 +21,13 @@ Funcționează **complet offline**, iar toate datele se salvează **doar pe tele
 - jos apar invitații care nu au încă masă
 
 **Invitați**
-- căutare după nume, telefon sau masă, **fără grija diacriticelor** („tanase" îl găsește pe „Tănase")
-- filtre: toți / neachitat / achitat / fără masă
+- căutare după nume, masă sau observații, **fără grija diacriticelor** („tanase" îl găsește pe „Tănase")
+- filtre: toți / neachitat / achitat / speciali / fără masă
 - bifezi plata cu **o singură apăsare** pe cerculețul din dreapta
-- apeși pe un invitat → editezi numele, telefonul, masa, plata, observațiile; îl poți suna direct sau șterge
+- apeși pe un invitat → editezi numele, masa, plata, observațiile sau îl ștergi
+- **invitat special** (sponsori): bifa aurie din fișa invitatului. Nu plătește, dar e socotit
+  automat ca achitat peste tot — statistici, filtre, mese, lista trimisă. În listă are o steluță
+  în locul bifei de plată; dacă scoți bifa de special, plata revine la ce era înainte
 - te avertizează dacă numele există deja în listă (și îți arată la ce masă stă), înainte de a-l adăuga a doua oară
 - la „Adaugă o listă" separă numele noi de cele care există deja: poți adăuga doar cele noi sau tot
 - după orice ștergere apare jos butonul **Anulează** câteva secunde — pune totul înapoi exact cum era

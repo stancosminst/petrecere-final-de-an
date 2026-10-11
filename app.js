@@ -7,7 +7,7 @@
 
 const KEY = 'petrecere.v1';
 const VKEY = 'petrecere.versiune';
-const APP_VERSION = '1.3';
+const APP_VERSION = '1.4';
 const DEFAULT_TABLES = 10;
 const DEFAULT_CAP = 10;
 
@@ -74,6 +74,7 @@ function curataDate(d) {
         phone: String(g.phone == null ? '' : g.phone).trim().slice(0, 40),
         tableId: idMese.has(tid) ? tid : null,
         paid: !!g.paid,
+        special: !!g.special,
         notes: String(g.notes == null ? '' : g.notes).trim().slice(0, 500)
       };
     });
@@ -202,6 +203,11 @@ function initials(name) {
   return (p[0][0] + (p[1] ? p[1][0] : '')).toUpperCase();
 }
 
+/* Un invitat special (sponsor) nu plătește, dar se socotește ca achitat peste tot:
+   statistici, filtre, mese, lista trimisă. Bifa „a achitat” rămâne neatinsă
+   dedesubt, ca dacă scoți bifa de special să revină la ce era. */
+function achitat(g) { return !!(g && (g.paid || g.special)); }
+
 function tableById(id) { return S.tables.find(t => t.id === id) || null; }
 function guestById(id) { return S.guests.find(g => g.id === id) || null; }
 function guestsAt(id) { return S.guests.filter(g => g.tableId === id); }
@@ -210,8 +216,10 @@ function unassigned() { return S.guests.filter(g => !g.tableId || !tableById(g.t
 function totals() {
   const cap = S.tables.reduce((a, t) => a + (+t.capacity || 0), 0);
   const seated = S.guests.filter(g => g.tableId && tableById(g.tableId)).length;
-  const paid = S.guests.filter(g => g.paid).length;
+  const paid = S.guests.filter(achitat).length;
+  const special = S.guests.filter(g => g.special).length;
   return {
+    special,
     cap,
     seated,
     free: Math.max(0, cap - seated),
@@ -241,6 +249,7 @@ function dateLabel(iso) {
 
 const IC = {
   check: '<svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg>',
+  star: '<svg viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/></svg>',
   plus: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
   chev: '<svg class="chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>',
   users: '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><path d="M16 5.2a3.2 3.2 0 0 1 0 6.1"/><path d="M18 14.9c2 .8 3 2.6 3 5.1"/></svg>',
@@ -270,7 +279,8 @@ function renderHome() {
 
   html += '<div class="stats">';
   html += statCard('gold', t.total, 'Invitați înscriși', t.noTable ? t.noTable + ' fără masă' : 'toți au masă');
-  html += statCard('ok', t.paid, 'Au achitat', pctPaid + '% din total');
+  html += statCard('ok', t.paid, 'Au achitat', pctPaid + '% din total'
+                  + (t.special ? ' · ' + t.special + (t.special === 1 ? ' special' : ' speciali') : ''));
   html += statCard('warn', t.unpaid, 'Nu au achitat', t.unpaid ? 'de urmărit' : 'totul încasat');
   html += statCard('info', t.free, 'Locuri libere', 'din ' + t.cap + ' locuri');
   html += '</div>';
@@ -278,6 +288,8 @@ function renderHome() {
   html += '<div class="section-title"><h2>Încasări</h2></div>';
   html += '<div class="card">'
         + '<div class="progress-row"><b>' + t.paid + ' din ' + t.total + ' au achitat</b><span>' + pctPaid + '%</span></div>'
+        + (t.special ? '<div class="muted-note" style="margin-top:4px">inclusiv ' + t.special
+            + (t.special === 1 ? ' invitat special, care nu plătește' : ' invitați speciali, care nu plătesc') + '</div>' : '')
         + '<div class="progress green"><i style="width:' + pctPaid + '%"></i></div>'
         + '</div>';
   html += '<div class="card">'
@@ -326,7 +338,7 @@ function tableRow(tb) {
   const cap = +tb.capacity || 0;
   const free = cap - list.length;
   const pct = cap ? Math.min(100, Math.round(list.length / cap * 100)) : 0;
-  const paid = list.filter(g => g.paid).length;
+  const paid = list.filter(achitat).length;
 
   let chip;
   if (free > 0) chip = '<span class="chip neutral">' + free + ' ' + (free === 1 ? 'loc liber' : 'locuri libere') + '</span>';
@@ -395,38 +407,38 @@ function emptyBox(icon, title, text) {
 function guestRow(g) {
   const tb = g.tableId ? tableById(g.tableId) : null;
   const bits = [];
+  if (g.special) bits.push('<span class="chip gold" style="padding:2px 8px">' + IC.star + ' Special</span>');
   bits.push(tb ? esc(tb.name) : '<span style="color:var(--warn)">fără masă</span>');
-  if (g.phone) bits.push(esc(g.phone));
   if (g.notes) bits.push('<span style="color:var(--faint)">📝</span>');
 
   return '<div class="grow" data-guest="' + g.id + '">'
        + '<span class="avatar">' + esc(initials(g.name)) + '</span>'
        + '<span class="ginfo"><span class="n">' + esc(g.name) + '</span>'
        + '<span class="s">' + bits.join('<span style="color:var(--faint)">·</span>') + '</span></span>'
-       + '<button class="pay-btn" data-pay="' + g.id + '" aria-label="Marchează achitat">'
-       + '<span class="pay-dot' + (g.paid ? ' on' : '') + '">' + IC.check + '</span></button>'
+       + '<button class="pay-btn" data-pay="' + g.id + '" aria-label="'
+       + (g.special ? 'Invitat special' : 'Marchează achitat') + '">'
+       + (g.special
+           ? '<span class="pay-dot special">' + IC.star + '</span>'
+           : '<span class="pay-dot' + (g.paid ? ' on' : '') + '">' + IC.check + '</span>')
+       + '</button>'
        + '</div>';
 }
 
 function filteredGuests() {
   let list = S.guests.slice();
 
-  if (guestFilter === 'paid') list = list.filter(g => g.paid);
-  else if (guestFilter === 'unpaid') list = list.filter(g => !g.paid);
+  if (guestFilter === 'paid') list = list.filter(achitat);
+  else if (guestFilter === 'unpaid') list = list.filter(g => !achitat(g));
+  else if (guestFilter === 'special') list = list.filter(g => g.special);
   else if (guestFilter === 'notable') list = list.filter(g => !g.tableId || !tableById(g.tableId));
 
   const q = norm(guestQuery);
   if (q) {
-    // „0745 111 222” sau „0745-111” trebuie să găsească „0745111222”
-    const cifre = q.replace(/[^0-9]/g, '');
-    const caCifre = cifre.length >= 3 && /^[0-9 ()+.\-]+$/.test(guestQuery.trim());
     list = list.filter(g => {
       const tb = tableById(g.tableId);
       return norm(g.name).includes(q)
-          || norm(g.phone).includes(q)
           || norm(g.notes).includes(q)
-          || (tb && norm(tb.name).includes(q))
-          || (caCifre && String(g.phone || '').replace(/[^0-9]/g, '').includes(cifre));
+          || (tb && norm(tb.name).includes(q));
     });
   }
   return list;
@@ -438,7 +450,7 @@ function renderGuests() {
   view.innerHTML =
       '<div class="search">'
     + '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>'
-    + '<input id="q" type="search" placeholder="Caută nume, telefon, masă…" value="' + esc(guestQuery) + '" autocomplete="off">'
+    + '<input id="q" type="search" placeholder="Caută nume, masă, observații…" value="' + esc(guestQuery) + '" autocomplete="off">'
     + '</div>'
     + '<div class="filters" id="fbar"></div>'
     + '<div class="section-title" id="ghead"></div>'
@@ -460,6 +472,7 @@ function paintGuestList() {
       filterBtn('all', 'Toți (' + t.total + ')')
     + filterBtn('unpaid', 'Neachitat (' + t.unpaid + ')')
     + filterBtn('paid', 'Achitat (' + t.paid + ')')
+    + (t.special || guestFilter === 'special' ? filterBtn('special', '★ Speciali (' + t.special + ')') : '')
     + filterBtn('notable', 'Fără masă (' + t.noTable + ')');
 
   $('#ghead').innerHTML =
@@ -624,15 +637,15 @@ function sheetGuest(guestId, presetTable, backTable) {
   html += '<div class="field"><label>Nume și prenume</label>'
         + '<input id="f_name" type="text" placeholder="ex. Popescu Andrei" value="' + esc(g ? g.name : '') + '" autocomplete="off"></div>';
 
-  html += '<div class="field"><label>Telefon (opțional)</label>'
-        + '<input id="f_phone" type="tel" placeholder="07…" value="' + esc(g ? (g.phone || '') : '') + '" autocomplete="off"></div>';
-
   html += '<div class="field"><label>Masa</label><select id="f_table">' + opts + '</select></div>';
 
-  html += '<div class="toggle-row">'
-        + '<div><div class="t">A achitat</div><div class="d">Bifează când primești banii</div></div>'
-        + '<button class="switch' + (g && g.paid ? ' on' : '') + '" id="f_paid" role="switch" aria-checked="'
-        + (g && g.paid ? 'true' : 'false') + '"></button></div>';
+  html += '<div class="toggle-row special-row">'
+        + '<div><div class="t">' + IC.star + ' Invitat special</div><div class="d">Sponsor sau invitat — nu plătește</div></div>'
+        + '<button class="switch gold" id="f_special" role="switch"></button></div>';
+
+  html += '<div class="toggle-row" id="f_paid_row">'
+        + '<div><div class="t">A achitat</div><div class="d" id="f_paid_d"></div></div>'
+        + '<button class="switch" id="f_paid" role="switch"></button></div>';
 
   html += '<div class="field"><label>Observații (opțional)</label>'
         + '<textarea id="f_notes" placeholder="ex. vine cu soția, vegetarian, ajunge mai târziu">'
@@ -641,24 +654,31 @@ function sheetGuest(guestId, presetTable, backTable) {
   html += '<div id="f_dup" hidden></div>';
   html += '<button class="btn" id="f_save">' + (g ? 'Salvează modificările' : 'Adaugă invitatul') + '</button>';
 
-  if (g) {
-    html += '<div class="btn-row">';
-    html += g.phone
-      ? '<a class="btn ghost sm" style="text-align:center;text-decoration:none;display:block" href="tel:'
-        + esc(g.phone) + '">Sună</a>'
-      : '<button class="btn ghost sm" disabled style="opacity:.45">Fără telefon</button>';
-    html += '<button class="btn danger sm" id="f_del">Șterge</button>';
-    html += '</div>';
-  }
+  if (g) html += '<button class="btn danger sm" id="f_del" style="margin-top:10px">Șterge invitatul</button>';
 
   openSheet(html);
 
   let paid = !!(g && g.paid);
+  let special = !!(g && g.special);
+
+  /* bifa de special o pune și o blochează pe cea de plată;
+     când o scoți, plata revine la ce era înainte */
+  function paintToggles() {
+    const sp = $('#f_special'), pd = $('#f_paid');
+    sp.classList.toggle('on', special);
+    sp.setAttribute('aria-checked', special ? 'true' : 'false');
+    pd.classList.toggle('on', special || paid);
+    pd.setAttribute('aria-checked', (special || paid) ? 'true' : 'false');
+    pd.disabled = special;
+    $('#f_paid_row').classList.toggle('locked', special);
+    $('#f_paid_d').textContent = special ? 'Inclus — e invitat special' : 'Bifează când primești banii';
+  }
+  paintToggles();
+
+  $('#f_special').addEventListener('click', () => { special = !special; paintToggles(); buzz(special ? 16 : 10); });
   $('#f_paid').addEventListener('click', () => {
-    paid = !paid;
-    $('#f_paid').classList.toggle('on', paid);
-    $('#f_paid').setAttribute('aria-checked', paid ? 'true' : 'false');
-    buzz(10);
+    if (special) return;
+    paid = !paid; paintToggles(); buzz(10);
   });
 
   /* dupOk = utilizatorul a confirmat că vrea totuși un nume care există deja */
@@ -674,9 +694,9 @@ function sheetGuest(guestId, presetTable, backTable) {
     const tid = $('#f_table').value || null;
     const data = {
       name,
-      phone: $('#f_phone').value.trim(),
       tableId: tid,
       paid,
+      special,
       notes: $('#f_notes').value.trim()
     };
     if (g) {
@@ -699,7 +719,7 @@ function sheetGuest(guestId, presetTable, backTable) {
     box.innerHTML = '<div class="warn-box">'
       + '<b>„' + esc(dup.name) + '” este deja în listă</b>'
       + '<p>' + (tb ? 'Stă la ' + esc(tb.name) : 'Nu are masă') + ' · '
-      + (dup.paid ? 'a achitat' : 'nu a achitat') + '.</p>'
+      + (dup.special ? 'invitat special' : (dup.paid ? 'a achitat' : 'nu a achitat')) + '.</p>'
       + '<div class="btn-row" style="margin-top:12px">'
       + '<button class="btn ghost sm" id="dup_no">Renunț</button>'
       + '<button class="btn sm" id="dup_yes">Adaugă oricum</button>'
@@ -789,7 +809,7 @@ function sheetAddMany(presetTable, backTable) {
   function add(names) {
     const tid = $('#m_table').value || null;
     names.forEach(name => {
-      S.guests.push({ id: uid(), createdAt: Date.now(), name, phone: '', tableId: tid, paid: false, notes: '' });
+      S.guests.push({ id: uid(), createdAt: Date.now(), name, tableId: tid, paid: false, special: false, notes: '' });
     });
     save();
     buzz(18);
@@ -844,12 +864,14 @@ function sheetTable(tid) {
   const list = sortGuests(guestsAt(tid));
   const cap = +tb.capacity || 0;
   const free = cap - list.length;
-  const paid = list.filter(g => g.paid).length;
+  const paid = list.filter(achitat).length;
 
   let html = '';
   html += '<h3 class="sheet-title">' + esc(tb.name) + '</h3>';
   html += '<p class="sheet-sub">' + list.length + ' din ' + cap + ' locuri ocupate · '
-        + paid + ' au achitat' + (free < 0 ? ' · <b style="color:var(--bad)">' + (-free) + ' peste capacitate</b>' : '')
+        + paid + ' au achitat'
+        + (list.some(g => g.special) ? ' (' + list.filter(g => g.special).length + ' speciali)' : '')
+        + (free < 0 ? ' · <b style="color:var(--bad)">' + (-free) + ' peste capacitate</b>' : '')
         + '</p>';
 
   // harta locurilor
@@ -858,7 +880,7 @@ function sheetTable(tid) {
   for (let i = 0; i < slots; i++) {
     const g = list[i];
     if (g) {
-      html += '<div class="seat taken' + (g.paid ? ' paid' : '') + '" data-guest="' + g.id + '">'
+      html += '<div class="seat taken' + (g.special ? ' special' : (g.paid ? ' paid' : '')) + '" data-guest="' + g.id + '">'
             + '<span class="sn">' + esc(initials(g.name)) + '</span></div>';
     } else {
       html += '<div class="seat">' + (i + 1) + '</div>';
@@ -1072,20 +1094,26 @@ function importBackup() {
   inp.click();
 }
 
+function stareText(g) {
+  if (g.special) return ' ★ invitat special';
+  return g.paid ? ' ✔' : ' (neachitat)';
+}
+
 function summaryText() {
   const t = totals();
   let out = S.eventName;
   if (S.eventDate) out += ' — ' + dateLabel(S.eventDate);
   if (S.eventPlace) out += ' — ' + S.eventPlace;
   out += '\n\n' + t.total + ' invitați · ' + t.paid + ' au achitat · '
-       + t.unpaid + ' de încasat · ' + t.free + ' locuri libere\n';
+       + t.unpaid + ' de încasat · ' + t.free + ' locuri libere\n'
+       + (t.special ? '(' + t.special + (t.special === 1 ? ' invitat special' : ' invitați speciali') + ', nu plătesc)\n' : '');
 
   S.tables.forEach(tb => {
     const list = sortGuests(guestsAt(tb.id));
     out += '\n' + tb.name + ' (' + list.length + '/' + tb.capacity + ')\n';
     if (!list.length) out += '  —\n';
     list.forEach((g, i) => {
-      out += '  ' + (i + 1) + '. ' + g.name + (g.paid ? ' ✔' : ' (neachitat)')
+      out += '  ' + (i + 1) + '. ' + g.name + stareText(g)
            + (g.notes ? ' — ' + g.notes : '') + '\n';
     });
   });
@@ -1093,7 +1121,7 @@ function summaryText() {
   const na = sortGuests(unassigned());
   if (na.length) {
     out += '\nFără masă (' + na.length + ')\n';
-    na.forEach((g, i) => { out += '  ' + (i + 1) + '. ' + g.name + (g.paid ? ' ✔' : ' (neachitat)') + '\n'; });
+    na.forEach((g, i) => { out += '  ' + (i + 1) + '. ' + g.name + stareText(g) + '\n'; });
   }
   return out;
 }
@@ -1175,7 +1203,8 @@ const QUICK = {
   shareText: () => shareSummary(),
   showUnpaid: () => goGuests('unpaid'),
   showNoTable: () => goGuests('notable'),
-  resetPaid: () => confirmSheet('Resetezi plățile?', 'Toți invitații devin „neachitat”.', 'Resetează', () => {
+  resetPaid: () => confirmSheet('Resetezi plățile?',
+    'Toți invitații devin „neachitat”. Invitații speciali rămân neatinși.', 'Resetează', () => {
     const before = snapshot();
     S.guests.forEach(g => { g.paid = false; });
     save(); closeSheet(); render();
@@ -1207,6 +1236,11 @@ document.addEventListener('click', (e) => {
   const pay = e.target.closest('[data-pay]');
   if (pay) {
     const g = guestById(pay.dataset.pay);
+    if (g && g.special) {
+      toast(g.name + ' e invitat special — nu plătește');
+      buzz(8);
+      return;
+    }
     if (g) {
       g.paid = !g.paid;
       save();
