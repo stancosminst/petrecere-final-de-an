@@ -227,8 +227,17 @@ main{
   border:1px solid var(--stroke); color:var(--gold-soft);
 }
 .ginfo{ flex:1; min-width:0; }
-.ginfo .n{ font-size:15px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.ginfo .s{ font-size:12.5px; color:var(--muted); margin-top:2px; display:flex; gap:7px; align-items:center; flex-wrap:wrap; }
+/* display:block e obligatoriu: „…” (text-overflow) nu funcționează pe un span inline,
+   iar fără el un nume foarte lung lățea toată pagina și apărea derulare laterală */
+.ginfo .n{ display:block; font-size:15px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* un singur rând cu „…” la capăt — înainte se rupea pe mai multe rânduri la mesele
+   cu nume lung, lăsând puncte de separare singure la început de rând */
+.ginfo .s{
+  font-size:12.5px; color:var(--muted); margin-top:3px; display:block;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.ginfo .s .chip{ vertical-align:1px; }
+.ginfo .s .sep{ color:var(--faint); margin:0 6px; }
 .pay-btn{
   flex:0 0 auto; border:0; background:none; padding:4px;
   display:grid; place-items:center;

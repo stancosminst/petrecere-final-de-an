@@ -7,7 +7,7 @@
 
 const KEY = 'petrecere.v1';
 const VKEY = 'petrecere.versiune';
-const APP_VERSION = '1.4';
+const APP_VERSION = '1.5';
 const DEFAULT_TABLES = 10;
 const DEFAULT_CAP = 10;
 
@@ -414,7 +414,7 @@ function guestRow(g) {
   return '<div class="grow" data-guest="' + g.id + '">'
        + '<span class="avatar">' + esc(initials(g.name)) + '</span>'
        + '<span class="ginfo"><span class="n">' + esc(g.name) + '</span>'
-       + '<span class="s">' + bits.join('<span style="color:var(--faint)">·</span>') + '</span></span>'
+       + '<span class="s">' + bits.join('<span class="sep">·</span>') + '</span></span>'
        + '<button class="pay-btn" data-pay="' + g.id + '" aria-label="'
        + (g.special ? 'Invitat special' : 'Marchează achitat') + '">'
        + (g.special
@@ -865,12 +865,13 @@ function sheetTable(tid) {
   const cap = +tb.capacity || 0;
   const free = cap - list.length;
   const paid = list.filter(achitat).length;
+  const nrSpec = list.filter(g => g.special).length;
 
   let html = '';
   html += '<h3 class="sheet-title">' + esc(tb.name) + '</h3>';
   html += '<p class="sheet-sub">' + list.length + ' din ' + cap + ' locuri ocupate · '
         + paid + ' au achitat'
-        + (list.some(g => g.special) ? ' (' + list.filter(g => g.special).length + ' speciali)' : '')
+        + (nrSpec ? ' (' + nrSpec + (nrSpec === 1 ? ' special)' : ' speciali)') : '')
         + (free < 0 ? ' · <b style="color:var(--bad)">' + (-free) + ' peste capacitate</b>' : '')
         + '</p>';
 
@@ -1049,7 +1050,11 @@ function confirmSheet(title, text, okLabel, onOk) {
    ============================================================ */
 
 function exportBackup() {
-  const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+  // ora locală a telefonului (toISOString dădea ora UTC: copia de la 18:18 apărea ca 15-18)
+  const d = new Date();
+  const doua = (n) => String(n).padStart(2, '0');
+  const stamp = d.getFullYear() + '-' + doua(d.getMonth() + 1) + '-' + doua(d.getDate())
+              + '-' + doua(d.getHours()) + '-' + doua(d.getMinutes());
   const blob = new Blob([JSON.stringify(S, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
